@@ -1,6 +1,18 @@
 # Changelog
 
-## 0.1.1 — 2026-07-06
+## 0.2.0 — 2026-07-06
+
+### Added
+
+- **Filtering** (`/`): incrementally narrow the list by process name, PID,
+  remote IP, or remote port. `Enter` applies, `Esc` clears.
+- **Sort modes** (`s`): cycle bandwidth → name → connection count. Name sort
+  gives a stable view when rates shuffle the default ordering.
+- **Pause** (`p`): freeze the display to read or copy without rows moving;
+  `r` still forces a one-off refresh while paused.
+- **Reverse DNS**: remote endpoints on expanded rows show their hostname,
+  resolved asynchronously off the render path and cached (including negative
+  results).
 
 ### Fixed
 

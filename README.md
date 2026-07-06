@@ -15,6 +15,10 @@ CONNRS  v0.1  ●  3 procs  14 conns  6 tcp tracked   admin ✓   1s
 - Live TCP/UDP connection list refreshed every second
 - Per-process grouping with expand/collapse
 - TCP rx/tx bandwidth using Windows IP Helper eStats
+- Incremental filtering (`/`) by process name, PID, remote IP, or port
+- Sort by bandwidth, process name, or connection count (`s`)
+- Pause the display (`p`) to inspect without rows reordering
+- Reverse DNS for remote endpoints on expanded rows (async, cached)
 - Admin-awareness: warns when running without elevation (reduces visibility)
 - Keyboard-driven TUI with viewport scrolling
 
@@ -64,9 +68,15 @@ Copy `connrs.exe` to a Windows machine and run it there.
 | `↑` / `k` | Move up |
 | `↓` / `j` | Move down |
 | `Enter` / `Space` | Expand / collapse process |
+| `/` | Filter by process name, PID, remote IP, or port |
+| `Esc` | Clear the filter |
+| `s` | Cycle sort: bandwidth → name → connection count |
+| `p` | Pause / resume refresh |
 | `r` | Force immediate refresh |
 | `?` | Toggle help |
 | `q` | Quit |
+
+While the filter prompt is open, keys type into the filter; `Enter` applies it, `Esc` cancels.
 
 Run as Administrator for complete TCP bandwidth data. When running without elevation, a warning banner is shown and some connections / counters may be missing.
 
