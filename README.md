@@ -30,7 +30,7 @@ CONNRS  v0.1  ●  3 procs  14 conns  6 tcp tracked   admin ✓   1s
 
 ## Requirements
 
-- Go 1.21+
+- Go 1.26+
 - Windows 10 / Server 2019 or later (to run)
 - Administrator privileges recommended (for full connection visibility and bandwidth data)
 
@@ -63,7 +63,7 @@ Copy `connrs.exe` to a Windows machine and run it there.
 |-----|--------|
 | `↑` / `k` | Move up |
 | `↓` / `j` | Move down |
-| `Enter` | Expand / collapse process |
+| `Enter` / `Space` | Expand / collapse process |
 | `r` | Force immediate refresh |
 | `?` | Toggle help |
 | `q` | Quit |
