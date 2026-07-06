@@ -5,6 +5,8 @@ import (
 	"time"
 
 	"connrs/internal/collector"
+
+	tea "github.com/charmbracelet/bubbletea"
 )
 
 func testSnapshot(processCount int) collector.Snapshot {
@@ -147,6 +149,161 @@ func TestApplySnapshotPrunesExpandedStateForDepartedProcesses(t *testing.T) {
 	}
 	if !model.expanded["discord.exe#200"] {
 		t.Fatalf("expected expansion state for surviving process to be kept")
+	}
+}
+
+func filterTestSnapshot() collector.Snapshot {
+	return collector.Snapshot{
+		CapturedAt: time.Now(),
+		Processes: []collector.ProcessSnapshot{
+			{
+				Name: "chrome.exe", PID: 100,
+				Connections: []collector.ConnectionSnapshot{
+					{Protocol: "TCP4", RemoteIP: "1.1.1.1", RemotePort: 443},
+				},
+			},
+			{
+				Name: "discord.exe", PID: 200,
+				Connections: []collector.ConnectionSnapshot{
+					{Protocol: "TCP4", RemoteIP: "162.159.128.233", RemotePort: 443},
+					{Protocol: "UDP4", RemoteIP: "66.22.212.5", RemotePort: 50001},
+				},
+			},
+		},
+	}
+}
+
+func TestVisibleProcessesFiltersByNameRemoteIPAndPort(t *testing.T) {
+	model := Model{snapshot: filterTestSnapshot()}
+
+	cases := []struct {
+		filter string
+		want   []string
+	}{
+		{"disc", []string{"discord.exe"}},
+		{"162.159", []string{"discord.exe"}},
+		{"1.1.1.1", []string{"chrome.exe"}},
+		{"443", []string{"chrome.exe", "discord.exe"}},
+		{"nomatch", nil},
+		{"", []string{"chrome.exe", "discord.exe"}},
+	}
+
+	for _, tc := range cases {
+		model.filter = tc.filter
+		visible := model.visibleProcesses()
+		if got, want := len(visible), len(tc.want); got != want {
+			t.Fatalf("filter %q: expected %d processes, got %d", tc.filter, want, got)
+		}
+		for index, name := range tc.want {
+			if visible[index].Name != name {
+				t.Fatalf("filter %q: expected %q at index %d, got %q", tc.filter, name, index, visible[index].Name)
+			}
+		}
+	}
+}
+
+func TestVisibleProcessesSortModes(t *testing.T) {
+	model := Model{
+		snapshot: collector.Snapshot{
+			Processes: []collector.ProcessSnapshot{
+				{Name: "zebra.exe", PID: 1, SentBps: 900, Connections: make([]collector.ConnectionSnapshot, 1)},
+				{Name: "alpha.exe", PID: 2, SentBps: 100, Connections: make([]collector.ConnectionSnapshot, 3)},
+			},
+		},
+	}
+
+	model.sort = sortByName
+	if got := model.visibleProcesses()[0].Name; got != "alpha.exe" {
+		t.Fatalf("expected name sort to put alpha.exe first, got %q", got)
+	}
+
+	model.sort = sortByConnections
+	if got := model.visibleProcesses()[0].Name; got != "alpha.exe" {
+		t.Fatalf("expected connection-count sort to put alpha.exe (3 conns) first, got %q", got)
+	}
+
+	model.sort = sortByBandwidth
+	if got := model.visibleProcesses()[0].Name; got != "zebra.exe" {
+		t.Fatalf("expected bandwidth sort to keep collector order (zebra.exe first), got %q", got)
+	}
+}
+
+func TestPausePreventsScheduledPolls(t *testing.T) {
+	model := NewModel(stubPoller{})
+	model.paused = true
+
+	model.Update(refreshTickMsg(time.Now()))
+	if model.polling {
+		t.Fatalf("expected no poll to start while paused")
+	}
+
+	model.paused = false
+	model.Update(refreshTickMsg(time.Now()))
+	if !model.polling {
+		t.Fatalf("expected poll to start once unpaused")
+	}
+}
+
+func TestFilterPromptTypingAndClearing(t *testing.T) {
+	model := NewModel(nil)
+	model.width = 90
+	model.height = 20
+	model.snapshot = filterTestSnapshot()
+
+	model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("/")})
+	if !model.filtering {
+		t.Fatalf("expected / to open the filter prompt")
+	}
+
+	model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("disc")})
+	if got, want := model.filter, "disc"; got != want {
+		t.Fatalf("expected typed filter %q, got %q", want, got)
+	}
+	if got := len(model.visibleProcesses()); got != 1 {
+		t.Fatalf("expected 1 visible process while typing, got %d", got)
+	}
+
+	// q must be typed into the prompt, not quit the program.
+	model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("q")})
+	if got, want := model.filter, "discq"; got != want {
+		t.Fatalf("expected q to append to filter, got %q", got)
+	}
+
+	model.Update(tea.KeyMsg{Type: tea.KeyBackspace})
+	model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if model.filtering {
+		t.Fatalf("expected enter to close the filter prompt")
+	}
+	if got, want := model.filter, "disc"; got != want {
+		t.Fatalf("expected enter to keep the filter, got %q", got)
+	}
+
+	model.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	if model.filter != "" {
+		t.Fatalf("expected esc to clear the applied filter, got %q", model.filter)
+	}
+}
+
+func TestSortCycleFollowsSelectedProcess(t *testing.T) {
+	model := NewModel(nil)
+	model.width = 90
+	model.height = 20
+	model.snapshot = collector.Snapshot{
+		Processes: []collector.ProcessSnapshot{
+			{Name: "zebra.exe", PID: 1},
+			{Name: "alpha.exe", PID: 2},
+		},
+	}
+	model.selected = 0 // zebra.exe under default bandwidth order
+
+	model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("s")})
+
+	if got, want := model.sort, sortByName; got != want {
+		t.Fatalf("expected sort mode to cycle to name, got %v", got)
+	}
+	process, ok := model.currentProcess()
+	if !ok || process.Name != "zebra.exe" {
+		t.Fatalf("expected selection to follow zebra.exe across re-sort, got %+v ok=%v", process, ok)
 	}
 }
 

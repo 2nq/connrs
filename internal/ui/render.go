@@ -93,7 +93,9 @@ func (m *Model) renderHeader() string {
 	}
 
 	status := m.spinner.View() + " live"
-	if !m.polling && !m.loading {
+	if m.paused {
+		status = "|| paused"
+	} else if !m.polling && !m.loading {
 		status = "o live"
 	}
 
@@ -115,6 +117,16 @@ func (m *Model) renderHeader() string {
 
 	parts := []string{titleLine, m.renderSummary(timestamp)}
 
+	if m.filtering || m.filter != "" {
+		label := "filter: " + m.filter
+		hint := "esc to clear"
+		if m.filtering {
+			label += "▌"
+			hint = "enter to apply · esc to cancel"
+		}
+		parts = append(parts, m.styles.infoPill.Render(label)+" "+m.styles.muted.Render(hint))
+	}
+
 	if !m.loading && !m.snapshot.IsAdmin {
 		parts = append(parts, m.styles.warningBox.Render(
 			"Administrator privileges not detected. Process visibility and TCP byte counters may be incomplete.",
@@ -129,10 +141,16 @@ func (m *Model) renderHeader() string {
 }
 
 func (m *Model) renderSummary(timestamp string) string {
+	processCount := strconv.Itoa(len(m.snapshot.Processes))
+	if m.filter != "" {
+		processCount = strconv.Itoa(len(m.visibleProcesses())) + "/" + processCount
+	}
+
 	pills := []string{
-		m.styles.infoPill.Render(strconv.Itoa(len(m.snapshot.Processes)) + " processes"),
+		m.styles.infoPill.Render(processCount + " processes"),
 		m.styles.infoPill.Render(strconv.Itoa(m.snapshot.TotalConnections) + " connections"),
 		m.styles.infoPill.Render(strconv.Itoa(m.snapshot.BandwidthTracked) + " tcp tracked"),
+		m.styles.metaPill.Render("SORT " + strings.ToUpper(m.sort.label())),
 		m.styles.metaPill.Render(strings.ToUpper(timestamp)),
 	}
 
@@ -169,12 +187,18 @@ func (m *Model) renderContent(width int) (string, []lineRange) {
 		return content, nil
 	}
 
+	processes := m.visibleProcesses()
+	if len(processes) == 0 {
+		content := m.styles.emptyBox.Width(max(28, width-2)).Render("No connections match filter \"" + m.filter + "\".")
+		return content, nil
+	}
+
 	rowWidth := max(32, width)
-	blocks := make([]string, 0, len(m.snapshot.Processes))
-	ranges := make([]lineRange, 0, len(m.snapshot.Processes))
+	blocks := make([]string, 0, len(processes))
+	ranges := make([]lineRange, 0, len(processes))
 
 	cursor := 0
-	for index, process := range m.snapshot.Processes {
+	for index, process := range processes {
 		block := m.renderProcessRow(process, index == m.selected, m.expanded[processKey(process)], rowWidth)
 		blocks = append(blocks, block)
 
@@ -261,6 +285,9 @@ func (m *Model) renderConnection(connection collector.ConnectionSnapshot) string
 			endpoints,
 		}, "  "),
 	)
+	if hostname := m.rdns.lookup(connection.RemoteIP); hostname != "" {
+		header += "  " + m.styles.connectionMeta.Render(hostname)
+	}
 
 	metrics := []string{}
 	if connection.BandwidthKnown {

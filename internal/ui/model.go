@@ -1,9 +1,12 @@
 package ui
 
 import (
+	"cmp"
 	"context"
 	"errors"
+	"slices"
 	"strconv"
+	"strings"
 	"time"
 
 	"connrs/internal/collector"
@@ -28,11 +31,38 @@ type lineRange struct {
 	end   int
 }
 
+type sortMode int
+
+const (
+	sortByBandwidth sortMode = iota
+	sortByName
+	sortByConnections
+
+	sortModeCount = 3
+)
+
+func (s sortMode) label() string {
+	switch s {
+	case sortByName:
+		return "name"
+	case sortByConnections:
+		return "conns"
+	default:
+		return "bw"
+	}
+}
+
 type Model struct {
 	poller   collector.Poller
 	snapshot collector.Snapshot
 	selected int
 	expanded map[string]bool
+
+	filter    string
+	filtering bool
+	sort      sortMode
+	paused    bool
+	rdns      *rdnsCache
 
 	width    int
 	height   int
@@ -60,6 +90,7 @@ func NewModel(poller collector.Poller) *Model {
 	return &Model{
 		poller:   poller,
 		expanded: map[string]bool{},
+		rdns:     newRDNSCache(),
 		help:     help.New(),
 		keys:     newKeyMap(),
 		spinner:  spin,
@@ -92,7 +123,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmds = append(cmds, cmd)
 	case refreshTickMsg:
 		cmds = append(cmds, tickCmd())
-		if !m.polling {
+		if !m.paused && !m.polling {
 			m.polling = true
 			cmds = append(cmds, pollCmd(m.poller))
 		}
@@ -107,6 +138,13 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.refreshViewport(false)
 	case tea.KeyMsg:
+		if m.filtering {
+			if cmd := m.handleFilterKey(msg); cmd != nil {
+				return m, cmd
+			}
+			return m, tea.Batch(cmds...)
+		}
+
 		switch {
 		case keyMatches(msg, m.keys.Quit):
 			return m, tea.Quit
@@ -123,6 +161,24 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case keyMatches(msg, m.keys.Expand):
 			m.toggleExpandedCurrent()
 			m.refreshViewport(true)
+		case keyMatches(msg, m.keys.Filter):
+			m.filtering = true
+			m.refreshViewport(false)
+		case keyMatches(msg, m.keys.ClearFilter):
+			if m.filter != "" {
+				key := m.currentKey()
+				m.filter = ""
+				m.restoreSelection(key)
+				m.refreshViewport(true)
+			}
+		case keyMatches(msg, m.keys.Sort):
+			key := m.currentKey()
+			m.sort = (m.sort + 1) % sortModeCount
+			m.restoreSelection(key)
+			m.refreshViewport(true)
+		case keyMatches(msg, m.keys.Pause):
+			m.paused = !m.paused
+			m.refreshViewport(false)
 		case keyMatches(msg, m.keys.Refresh):
 			if !m.polling {
 				m.polling = true
@@ -136,6 +192,36 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	return m, tea.Batch(cmds...)
+}
+
+// handleFilterKey consumes all keys while the filter prompt is active, so
+// navigation shortcuts like q/j/k can be typed as filter text.
+func (m *Model) handleFilterKey(msg tea.KeyMsg) tea.Cmd {
+	switch msg.Type {
+	case tea.KeyCtrlC:
+		return tea.Quit
+	case tea.KeyEsc:
+		m.filtering = false
+		m.filter = ""
+		m.restoreSelection("")
+	case tea.KeyEnter:
+		m.filtering = false
+	case tea.KeyBackspace:
+		if m.filter != "" {
+			runes := []rune(m.filter)
+			m.filter = string(runes[:len(runes)-1])
+			m.selected = 0
+		}
+	case tea.KeySpace:
+		m.filter += " "
+		m.selected = 0
+	case tea.KeyRunes:
+		m.filter += string(msg.Runes)
+		m.selected = 0
+	}
+
+	m.refreshViewport(true)
+	return nil
 }
 
 func tickCmd() tea.Cmd {
@@ -166,35 +252,94 @@ func processKey(process collector.ProcessSnapshot) string {
 }
 
 func (m *Model) applySnapshot(snapshot collector.Snapshot) {
-	currentKey := ""
-	if len(m.snapshot.Processes) > 0 && m.selected >= 0 && m.selected < len(m.snapshot.Processes) {
-		currentKey = processKey(m.snapshot.Processes[m.selected])
-	}
-
+	key := m.currentKey()
 	m.snapshot = snapshot
 	m.pruneExpanded()
-	if len(m.snapshot.Processes) == 0 {
-		m.selected = 0
-		return
-	}
+	m.restoreSelection(key)
+}
 
-	if currentKey == "" {
-		if m.selected >= len(m.snapshot.Processes) {
-			m.selected = len(m.snapshot.Processes) - 1
+// visibleProcesses returns the processes the UI operates on: the snapshot
+// list narrowed by the active filter and ordered by the active sort mode.
+// Selection indexes refer to this list, not to the raw snapshot.
+func (m *Model) visibleProcesses() []collector.ProcessSnapshot {
+	processes := m.snapshot.Processes
+
+	if query := strings.ToLower(strings.TrimSpace(m.filter)); query != "" {
+		filtered := make([]collector.ProcessSnapshot, 0, len(processes))
+		for _, process := range processes {
+			if processMatches(process, query) {
+				filtered = append(filtered, process)
+			}
 		}
-		return
+		processes = filtered
 	}
 
-	for index, process := range m.snapshot.Processes {
-		if processKey(process) == currentKey {
-			m.selected = index
-			return
+	switch m.sort {
+	case sortByName:
+		processes = slices.Clone(processes)
+		slices.SortStableFunc(processes, func(left, right collector.ProcessSnapshot) int {
+			if c := cmp.Compare(strings.ToLower(left.Name), strings.ToLower(right.Name)); c != 0 {
+				return c
+			}
+			return cmp.Compare(left.PID, right.PID)
+		})
+	case sortByConnections:
+		processes = slices.Clone(processes)
+		slices.SortStableFunc(processes, func(left, right collector.ProcessSnapshot) int {
+			if c := cmp.Compare(len(right.Connections), len(left.Connections)); c != 0 {
+				return c
+			}
+			if c := cmp.Compare(strings.ToLower(left.Name), strings.ToLower(right.Name)); c != 0 {
+				return c
+			}
+			return cmp.Compare(left.PID, right.PID)
+		})
+	}
+
+	return processes
+}
+
+func processMatches(process collector.ProcessSnapshot, query string) bool {
+	if strings.Contains(strings.ToLower(process.Name), query) {
+		return true
+	}
+	if strings.Contains(itoa32(process.PID), query) {
+		return true
+	}
+	for _, connection := range process.Connections {
+		if strings.Contains(strings.ToLower(connection.RemoteIP), query) {
+			return true
+		}
+		if connection.RemotePort != 0 &&
+			strings.Contains(strconv.FormatUint(uint64(connection.RemotePort), 10), query) {
+			return true
 		}
 	}
+	return false
+}
 
-	if m.selected >= len(m.snapshot.Processes) {
-		m.selected = len(m.snapshot.Processes) - 1
+func (m *Model) currentKey() string {
+	processes := m.visibleProcesses()
+	if m.selected >= 0 && m.selected < len(processes) {
+		return processKey(processes[m.selected])
 	}
+	return ""
+}
+
+// restoreSelection re-points the selection at the process identified by key
+// after the visible list changed (new snapshot, filter edit, or sort cycle),
+// falling back to clamping the current index.
+func (m *Model) restoreSelection(key string) {
+	processes := m.visibleProcesses()
+	if key != "" {
+		for index, process := range processes {
+			if processKey(process) == key {
+				m.selected = index
+				return
+			}
+		}
+	}
+	m.selected = max(0, min(m.selected, len(processes)-1))
 }
 
 // pruneExpanded drops expansion state for processes that left the snapshot,
@@ -216,19 +361,20 @@ func (m *Model) pruneExpanded() {
 }
 
 func (m *Model) toggleExpandedCurrent() {
-	if m.selected < 0 || m.selected >= len(m.snapshot.Processes) {
+	processes := m.visibleProcesses()
+	if m.selected < 0 || m.selected >= len(processes) {
 		return
 	}
 	if m.expanded == nil {
 		m.expanded = map[string]bool{}
 	}
 
-	key := processKey(m.snapshot.Processes[m.selected])
+	key := processKey(processes[m.selected])
 	m.expanded[key] = !m.expanded[key]
 }
 
 func (m *Model) moveSelection(delta int) {
-	count := len(m.snapshot.Processes)
+	count := len(m.visibleProcesses())
 	if count == 0 {
 		return
 	}
@@ -237,13 +383,11 @@ func (m *Model) moveSelection(delta int) {
 }
 
 func (m *Model) currentProcess() (collector.ProcessSnapshot, bool) {
-	if len(m.snapshot.Processes) == 0 {
+	processes := m.visibleProcesses()
+	if m.selected < 0 || m.selected >= len(processes) {
 		return collector.ProcessSnapshot{}, false
 	}
-	if m.selected < 0 || m.selected >= len(m.snapshot.Processes) {
-		return collector.ProcessSnapshot{}, false
-	}
-	return m.snapshot.Processes[m.selected], true
+	return processes[m.selected], true
 }
 
 func itoa32(value int32) string {
