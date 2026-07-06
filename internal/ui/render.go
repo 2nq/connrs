@@ -17,6 +17,8 @@ func (m *Model) View() string {
 
 	header := m.renderHeader()
 	footer := m.renderFooter()
+	// Re-clamp in case YOffset was assigned directly, bypassing SetYOffset;
+	// the viewport panics on out-of-range offsets when rendering.
 	m.viewport.SetYOffset(m.viewport.YOffset)
 
 	return m.styles.app.Render(
@@ -158,12 +160,12 @@ func (m *Model) renderFooter() string {
 
 func (m *Model) renderContent(width int) (string, []lineRange) {
 	if m.loading && len(m.snapshot.Processes) == 0 {
-		content := m.styles.emptyBox.Copy().Width(max(28, width-2)).Render("Collecting live connection data...")
+		content := m.styles.emptyBox.Width(max(28, width-2)).Render("Collecting live connection data...")
 		return content, nil
 	}
 
 	if len(m.snapshot.Processes) == 0 {
-		content := m.styles.emptyBox.Copy().Width(max(28, width-2)).Render("No active TCP or UDP connections detected.")
+		content := m.styles.emptyBox.Width(max(28, width-2)).Render("No active TCP or UDP connections detected.")
 		return content, nil
 	}
 
@@ -181,7 +183,7 @@ func (m *Model) renderContent(width int) (string, []lineRange) {
 			start: cursor,
 			end:   cursor + height - 1,
 		})
-		cursor += height + 1
+		cursor += height
 	}
 
 	return strings.Join(blocks, "\n"), ranges
@@ -244,7 +246,7 @@ func (m *Model) renderProcessRow(
 		style = m.styles.selectedRow
 	}
 
-	return style.Copy().Width(width).Render(strings.Join(lines, "\n"))
+	return style.Width(width).Render(strings.Join(lines, "\n"))
 }
 
 func (m *Model) renderConnection(connection collector.ConnectionSnapshot) string {
@@ -346,18 +348,4 @@ func displayProcessName(name string, pid int32) string {
 		return trimmed
 	}
 	return "PID " + itoa32(pid)
-}
-
-func min(left int, right int) int {
-	if left < right {
-		return left
-	}
-	return right
-}
-
-func max(left int, right int) int {
-	if left > right {
-		return left
-	}
-	return right
 }

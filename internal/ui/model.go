@@ -34,10 +34,10 @@ type Model struct {
 	selected int
 	expanded map[string]bool
 
-	width   int
-	height  int
-	loading bool
-	polling bool
+	width    int
+	height   int
+	loading  bool
+	polling  bool
 	showHelp bool
 
 	lastErr error
@@ -131,7 +131,6 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		default:
 			var cmd tea.Cmd
 			m.viewport, cmd = m.viewport.Update(msg)
-			m.viewport.SetYOffset(m.viewport.YOffset)
 			cmds = append(cmds, cmd)
 		}
 	}
@@ -173,6 +172,7 @@ func (m *Model) applySnapshot(snapshot collector.Snapshot) {
 	}
 
 	m.snapshot = snapshot
+	m.pruneExpanded()
 	if len(m.snapshot.Processes) == 0 {
 		m.selected = 0
 		return
@@ -197,8 +197,26 @@ func (m *Model) applySnapshot(snapshot collector.Snapshot) {
 	}
 }
 
+// pruneExpanded drops expansion state for processes that left the snapshot,
+// so the map does not grow without bound while the monitor runs.
+func (m *Model) pruneExpanded() {
+	if len(m.expanded) == 0 {
+		return
+	}
+
+	alive := make(map[string]struct{}, len(m.snapshot.Processes))
+	for _, process := range m.snapshot.Processes {
+		alive[processKey(process)] = struct{}{}
+	}
+	for key := range m.expanded {
+		if _, ok := alive[key]; !ok {
+			delete(m.expanded, key)
+		}
+	}
+}
+
 func (m *Model) toggleExpandedCurrent() {
-	if len(m.snapshot.Processes) == 0 {
+	if m.selected < 0 || m.selected >= len(m.snapshot.Processes) {
 		return
 	}
 	if m.expanded == nil {
@@ -215,14 +233,7 @@ func (m *Model) moveSelection(delta int) {
 		return
 	}
 
-	next := m.selected + delta
-	if next < 0 {
-		next = 0
-	}
-	if next >= count {
-		next = count - 1
-	}
-	m.selected = next
+	m.selected = max(0, min(m.selected+delta, count-1))
 }
 
 func (m *Model) currentProcess() (collector.ProcessSnapshot, bool) {

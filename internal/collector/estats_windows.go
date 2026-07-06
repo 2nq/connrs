@@ -4,7 +4,6 @@ package collector
 
 import (
 	"encoding/binary"
-	"errors"
 	"math/bits"
 	"net"
 	"strconv"
@@ -19,12 +18,11 @@ import (
 const tcpConnectionEstatsData = 1
 
 var (
-	modIPHlpAPI                     = windows.NewLazySystemDLL("iphlpapi.dll")
-	procGetPerTCPConnectionEStats   = modIPHlpAPI.NewProc("GetPerTcpConnectionEStats")
-	procSetPerTCPConnectionEStats   = modIPHlpAPI.NewProc("SetPerTcpConnectionEStats")
-	procGetPerTCP6ConnectionEStats  = modIPHlpAPI.NewProc("GetPerTcp6ConnectionEStats")
-	procSetPerTCP6ConnectionEStats  = modIPHlpAPI.NewProc("SetPerTcp6ConnectionEStats")
-	errBandwidthNotSupported        = errors.New("bandwidth sampling not supported")
+	modIPHlpAPI                    = windows.NewLazySystemDLL("iphlpapi.dll")
+	procGetPerTCPConnectionEStats  = modIPHlpAPI.NewProc("GetPerTcpConnectionEStats")
+	procSetPerTCPConnectionEStats  = modIPHlpAPI.NewProc("SetPerTcpConnectionEStats")
+	procGetPerTCP6ConnectionEStats = modIPHlpAPI.NewProc("GetPerTcp6ConnectionEStats")
+	procSetPerTCP6ConnectionEStats = modIPHlpAPI.NewProc("SetPerTcp6ConnectionEStats")
 )
 
 type tcpBandwidthSampler struct {
@@ -75,6 +73,17 @@ type tcpEstatsDataRODv0 struct {
 func newTCPBandwidthSampler() *tcpBandwidthSampler {
 	return &tcpBandwidthSampler{
 		enabled: make(map[ConnectionKey]struct{}),
+	}
+}
+
+// prune forgets connections that disappeared. EStats collection is enabled
+// per TCB, so a reused 4-tuple belongs to a new TCB and must be re-enabled;
+// keeping stale keys would skip that and silently stop tracking bandwidth.
+func (s *tcpBandwidthSampler) prune(active map[ConnectionKey]struct{}) {
+	for key := range s.enabled {
+		if _, ok := active[key]; !ok {
+			delete(s.enabled, key)
+		}
 	}
 }
 

@@ -16,9 +16,9 @@ type stubPoller struct{}
 
 func (stubPoller) Poll(context.Context) (collector.Snapshot, error) {
 	return collector.Snapshot{
-		CapturedAt: time.Now(),
-		IsAdmin:    true,
-	},
+			CapturedAt: time.Now(),
+			IsAdmin:    true,
+		},
 		nil
 }
 

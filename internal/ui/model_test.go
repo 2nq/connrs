@@ -103,6 +103,53 @@ func TestRefreshViewportClampsYOffsetWhenContentShrinks(t *testing.T) {
 	}
 }
 
+func TestRenderContentLineRangesMatchRenderedLines(t *testing.T) {
+	model := NewModel(nil)
+	model.width = 90
+	model.height = 16
+	model.snapshot = testSnapshot(8)
+
+	model.refreshViewport(false)
+
+	if got, want := len(model.lines), 8; got != want {
+		t.Fatalf("expected %d line ranges, got %d", want, got)
+	}
+	for index, lr := range model.lines {
+		if index == 0 {
+			continue
+		}
+		if got, want := lr.start, model.lines[index-1].end+1; got != want {
+			t.Fatalf("expected range %d to start at line %d, got %d", index, want, got)
+		}
+	}
+	if got, want := model.lines[len(model.lines)-1].end, model.viewport.TotalLineCount()-1; got != want {
+		t.Fatalf("expected last range to end at content line %d, got %d", want, got)
+	}
+}
+
+func TestApplySnapshotPrunesExpandedStateForDepartedProcesses(t *testing.T) {
+	model := Model{
+		expanded: map[string]bool{
+			"chrome.exe#100":  true,
+			"discord.exe#200": true,
+		},
+	}
+
+	model.applySnapshot(collector.Snapshot{
+		CapturedAt: time.Now(),
+		Processes: []collector.ProcessSnapshot{
+			{Name: "discord.exe", PID: 200},
+		},
+	})
+
+	if model.expanded["chrome.exe#100"] {
+		t.Fatalf("expected expansion state for departed process to be pruned")
+	}
+	if !model.expanded["discord.exe#200"] {
+		t.Fatalf("expected expansion state for surviving process to be kept")
+	}
+}
+
 func TestMoveSelectionStopsAtListBounds(t *testing.T) {
 	model := Model{
 		selected: 1,

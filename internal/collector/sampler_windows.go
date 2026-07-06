@@ -30,9 +30,13 @@ func (s *windowsSampler) Sample(ctx context.Context, isAdmin bool) ([]ObservedCo
 	}
 
 	observed := make([]ObservedConnection, 0, len(connections))
+	activeKeys := make(map[ConnectionKey]struct{}, len(connections))
+	activePIDs := make(map[int32]struct{}, len(connections))
 	for _, conn := range connections {
 		processName := s.resolver.nameForPID(ctx, conn.Pid)
 		key := makeConnectionKey(conn, processName)
+		activeKeys[key] = struct{}{}
+		activePIDs[conn.Pid] = struct{}{}
 
 		totals := TrafficTotals{}
 		if isAdmin {
@@ -54,6 +58,9 @@ func (s *windowsSampler) Sample(ctx context.Context, isAdmin bool) ([]ObservedCo
 			Totals:      totals,
 		})
 	}
+
+	s.bandwidth.prune(activeKeys)
+	s.resolver.prune(activePIDs)
 
 	return observed, nil
 }

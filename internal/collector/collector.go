@@ -12,11 +12,11 @@ type Sampler interface {
 type AdminChecker func() bool
 
 type Collector struct {
-	sampler   Sampler
-	isAdmin   AdminChecker
-	lastPoll  time.Time
-	previous  map[ConnectionKey]TrafficTotals
-	timeNow   func() time.Time
+	sampler  Sampler
+	isAdmin  AdminChecker
+	lastPoll time.Time
+	previous map[ConnectionKey]TrafficTotals
+	timeNow  func() time.Time
 }
 
 func New(sampler Sampler, isAdmin AdminChecker) *Collector {

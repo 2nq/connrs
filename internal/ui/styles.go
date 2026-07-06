@@ -4,14 +4,14 @@ import "github.com/charmbracelet/lipgloss"
 
 var (
 	cardBorder = lipgloss.Border{
-		Top:          "─",
-		Bottom:       "─",
-		Left:         "│",
-		Right:        "│",
-		TopLeft:      "╭",
-		TopRight:     "╮",
-		BottomLeft:   "╰",
-		BottomRight:  "╯",
+		Top:         "─",
+		Bottom:      "─",
+		Left:        "│",
+		Right:       "│",
+		TopLeft:     "╭",
+		TopRight:    "╮",
+		BottomLeft:  "╰",
+		BottomRight: "╯",
 	}
 )
 

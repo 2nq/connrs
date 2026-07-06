@@ -57,3 +57,19 @@ func (r *processResolver) nameForPID(_ context.Context, pid int32) string {
 	r.mu.Unlock()
 	return name
 }
+
+// prune drops cached names for PIDs no longer seen. Windows reuses PIDs, so a
+// stale entry would label a brand-new process with the old process's name.
+func (r *processResolver) prune(active map[int32]struct{}) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	for pid := range r.names {
+		if pid == 0 || pid == 4 {
+			continue // fixed kernel pseudo-processes, seeded at construction
+		}
+		if _, ok := active[pid]; !ok {
+			delete(r.names, pid)
+		}
+	}
+}
